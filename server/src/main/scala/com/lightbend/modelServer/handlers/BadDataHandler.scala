@@ -16,21 +16,22 @@
  *
  */
 
-package com.lightbend.kafka.configuration
+package com.lightbend.modelServer.handlers
 
-/**
-  * Created by boris on 5/10/17.
-  */
-object ModelServingConfiguration {
+import org.apache.flink.api.common.functions.FlatMapFunction
+import org.apache.flink.util.Collector
 
-  val ZOOKEEPER_HOST = "localhost:2181"
-  val KAFKA_BROKER = "localhost:9092"
+import scala.util.{Failure, Success, Try}
 
-  val DATA_TOPIC = "mdata"
-  val MODELS_TOPIC = "models"
-  val SPECULATIVE_TOPIC = "speculative"
+object BadDataHandler {
+  def apply[T] = new BadDataHandler[T]
+}
 
-  val DATA_GROUP = "wineRecordsGroup"
-  val MODELS_GROUP = "modelRecordsGroup"
-  val SPECULATIVE_GROUP = "speculativeRecordsGroup"
+class BadDataHandler[T] extends FlatMapFunction[Try[T], T] {
+  override def flatMap(t: Try[T], out: Collector[T]): Unit = {
+    t match {
+      case Success(t) => out.collect(t)
+      case Failure(e) => println(s"BAD DATA: ${e.getMessage}")
+    }
+  }
 }

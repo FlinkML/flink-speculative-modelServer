@@ -16,21 +16,14 @@
  *
  */
 
-package com.lightbend.kafka.configuration
+package com.lightbend.java.modelServer.model;
+
+import java.util.Optional;
 
 /**
-  * Created by boris on 5/10/17.
-  */
-object ModelServingConfiguration {
-
-  val ZOOKEEPER_HOST = "localhost:2181"
-  val KAFKA_BROKER = "localhost:9092"
-
-  val DATA_TOPIC = "mdata"
-  val MODELS_TOPIC = "models"
-  val SPECULATIVE_TOPIC = "speculative"
-
-  val DATA_GROUP = "wineRecordsGroup"
-  val MODELS_GROUP = "modelRecordsGroup"
-  val SPECULATIVE_GROUP = "speculativeRecordsGroup"
+ * Created by boris on 7/14/17.
+ */
+public interface ModelFactory {
+    Optional<Model> create(ModelToServe descriptor);
+    Model restore(byte[] bytes);
 }

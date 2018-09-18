@@ -1,103 +1,106 @@
-/*
- * Copyright (C) 2017  Lightbend
- *
- * This file is part of flink-ModelServing
- *
- * flink-ModelServing is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *
- */
-
 package com.lightbend.modelServer.model.tensorflow
 
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
+
+import com.lightbend.modelServer.model.{DataPreprocessor, Model, ModelFactory, ModelToServe}
+import com.lightbend.model.cpudata.CPUData
 import com.lightbend.model.modeldescriptor.ModelDescriptor
-import com.lightbend.model.winerecord.WineRecord
-import com.lightbend.modelServer.ModelToServe
-import com.lightbend.modelServer.model.{Model, ModelFactory}
 import org.tensorflow.{Graph, Session, Tensor}
 
+
 /**
-  * Created by boris on 5/26/17.
-  * Implementation of tensorflow model
-  */
+ * Created by boris on 5/26/17.
+ * Implementation of a model using TensorFlow for "Records".
+ */
+class TensorFlowModel(inputStream: Array[Byte], pd : DataPreprocessor) extends Model {
 
-class TensorFlowModel(inputStream : Array[Byte]) extends Model{
-
+  val preprocessor = new Preprocessor(pd.width, pd.mean, pd.std)
   val graph = new Graph
   graph.importGraphDef(inputStream)
   val session = new Session(graph)
 
-  override def score(input: AnyVal): AnyVal = {
+  override def score(record: AnyVal): Option[AnyVal] = {
 
-    val record = input.asInstanceOf[WineRecord]
-    val data = Array(
-      record.fixedAcidity.toFloat,
-      record.volatileAcidity.toFloat,
-      record.citricAcid.toFloat,
-      record.residualSugar.toFloat,
-      record.chlorides.toFloat,
-      record.freeSulfurDioxide.toFloat,
-      record.totalSulfurDioxide.toFloat,
-      record.density.toFloat,
-      record.pH.toFloat,
-      record.sulphates.toFloat,
-      record.alcohol.toFloat
-    )
-    val modelInput = Tensor.create(Array(data))
-    val result = session.runner.feed("dense_1_input", modelInput).fetch("dense_3/Sigmoid").run().get(0)
-    val rshape = result.shape
-    var rMatrix = Array.ofDim[Float](rshape(0).asInstanceOf[Int],rshape(1).asInstanceOf[Int])
-    result.copyTo(rMatrix)
-    var value = (0, rMatrix(0)(0))
-    1 to (rshape(1).asInstanceOf[Int] -1) foreach{i => {
-      if(rMatrix(0)(i) > value._2)
-        value = (i, rMatrix(0)(i))
-    }}
-    value._1.toDouble
+    val data = record.asInstanceOf[CPUData]
+    preprocessor.addMeasurement(data.utilization)
+    if(preprocessor.currentWidth >= pd.width) {
+      val tmatrix: Array[Array[Float]] = Array(preprocessor.getValue())
+      val input = Tensor.create(tmatrix)
+      val result = session.runner.feed(pd.input, input).fetch(pd.output).run.get(0)
+      val rshape = result.shape
+      val rArray: Array[Array[Float]] = Array.ofDim(rshape(0).asInstanceOf[Int], rshape(1).asInstanceOf[Int])
+      val y = result.copyTo(rArray)
+      val softmax = rArray(0)
+      if (softmax(0) >= softmax(1)) Some(0) else Some(1)
+    }
+    else None
   }
 
   override def cleanup(): Unit = {
-    try{
+    try {
       session.close
-    }catch {
-      case t: Throwable =>    // Swallow
+    } catch {
+      case t: Throwable => // Swallow
     }
-    try{
+    try {
       graph.close
-    }catch {
-      case t: Throwable =>    // Swallow
+    } catch {
+      case t: Throwable => // Swallow
     }
   }
 
-  override def toBytes(): Array[Byte] = graph.toGraphDef
+  override def toBytes(): Array[Byte] = {
+    val p = DataPreprocessor.toByteArray(pd)
+    val g = graph.toGraphDef
+    val bos = new ByteArrayOutputStream()
+    val dos = new DataOutputStream(bos)
+    dos.writeLong(p.length.toLong)
+    dos.write(p)
+    dos.writeLong(g.length.toLong)
+    dos.write(g)
+    bos.toByteArray
+  }
 
   override def getType: Long = ModelDescriptor.ModelType.TENSORFLOW.value
+
 }
 
-object TensorFlowModel extends  ModelFactory {
-  def apply(inputStream: Array[Byte]): Option[TensorFlowModel] = {
-    try {
-      Some(new TensorFlowModel(inputStream))
-    }catch{
-      case t: Throwable => None
-    }
+object TensorFlowModel extends ModelFactory {
+
+  override def create(input: ModelToServe): Model = {
+    val preprocessor = DataPreprocessor(input.width, input.mean, input.std, input.input, input.output)
+    new TensorFlowModel(input.model, preprocessor)
   }
 
-  override def create(input: ModelToServe): Option[Model] = {
-    try {
-      Some(new TensorFlowModel(input.model))
-    }catch{
-      case t: Throwable => None
-    }
+  override def restore(bytes: Array[Byte]): Model = {
+    val dis = new DataInputStream(new ByteArrayInputStream(bytes))
+    val plen = dis.readLong().toInt
+    val p = new Array[Byte](plen)
+    dis.read(p)
+    val preprocessor = DataPreprocessor.fromByteArray(p)
+    val glen = dis.readLong().toInt
+    val g = new Array[Byte](glen)
+    dis.read(g)
+    new TensorFlowModel(g, preprocessor)
   }
+}
 
-  override def restore(bytes: Array[Byte]): Model = new TensorFlowModel(bytes)
+class Preprocessor(width : Int, mean: Double, std: Double){
+  var currentWidth = 0
+  val value : Array[Float] = new Array[Float](width)
+
+  def getCurrentWidth() : Int = currentWidth
+
+  def addMeasurement(v : Double) : Unit = {
+
+    1 to width -1  foreach(i => value(i-1) = value(i))
+    value(width -1) = standardize(v)
+    if (currentWidth < width)
+      currentWidth = currentWidth + 1
+  }
+  def getValue() : Array[Float] = value
+
+  def standardize(value: Double): Float = {
+    ((value - mean) / std).toFloat
+  }
 }

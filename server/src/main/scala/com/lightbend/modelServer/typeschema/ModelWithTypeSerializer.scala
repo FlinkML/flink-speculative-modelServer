@@ -1,9 +1,8 @@
 package com.lightbend.modelServer.typeschema
 
-import com.lightbend.modelServer.{ModelToServe, ModelWithType}
-import com.lightbend.modelServer.model.Model
 import org.apache.flink.api.common.typeutils.{CompatibilityResult, GenericTypeSerializerConfigSnapshot, TypeSerializer, TypeSerializerConfigSnapshot}
 import org.apache.flink.core.memory.{DataInputView, DataOutputView}
+import com.lightbend.modelServer.model.{ModelToServe, ModelWithType}
 
 class ModelWithTypeSerializer extends TypeSerializer[ModelWithType] {
 

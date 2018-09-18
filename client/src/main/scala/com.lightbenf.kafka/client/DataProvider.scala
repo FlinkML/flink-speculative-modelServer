@@ -18,18 +18,19 @@
 
 package com.lightbend.kafka.client
 
-import java.io.{ByteArrayOutputStream, File}
-import java.nio.file.{Files, Paths}
+import java.io._
 
 import com.google.protobuf.ByteString
 import com.lightbend.kafka.{KafkaLocalServer, MessageSender}
-import com.lightbend.model.modeldescriptor.ModelDescriptor
-import com.lightbend.model.winerecord.WineRecord
+
+import scala.concurrent.Future
+import com.lightbend.kafka.configuration.ModelServingConfiguration._
+import com.lightbend.model.cpudata.CPUData
+import com.lightbend.model.modeldescriptor.{ModelDescriptor, ModelPreprocessing}
+import com.lightbenf.kafka.generator.{MarkovChain, Model, Noise, RandomPulses}
 
 import scala.concurrent.ExecutionContext.Implicits.global
-import scala.concurrent.Future
-import scala.io.Source
-import com.lightbend.kafka.configuration.ModelServingConfiguration._
+import scala.util.Random
 
 /**
  * Created by boris on 5/10/17.
@@ -38,22 +39,17 @@ import com.lightbend.kafka.configuration.ModelServingConfiguration._
  */
 object DataProvider {
 
-  val file = "data/winequality_red.csv"
-  var dataTimeInterval = 1000 * 1 // 1 sec
+  val dataTimeInterval = 1000             // 1 sec
   val directory = "data/"
-  val tensorfile = "data/optimized_WineQuality.pb"
-  var modelTimeInterval = 1000 * 60 * 5 // 5 mins
+  var modelTimeInterval = 1000 * 60       // 1 mins
 
   def main(args: Array[String]) {
 
-    println(s"Using kafka brokers at $LOCAL_KAFKA_BROKER")
+    println(s"Using kafka brokers at $KAFKA_BROKER")
     println(s"Data Message delay $dataTimeInterval")
-    println(s"Model Message delay $modelTimeInterval")
 
     val kafka = KafkaLocalServer(true)
     kafka.start()
-    kafka.createTopic(DATA_TOPIC)
-    kafka.createTopic(MODELS_TOPIC)
 
     println(s"Cluster created")
 
@@ -64,57 +60,60 @@ object DataProvider {
       pause(600000)
   }
 
-  def publishData() : Future[Unit] = Future {
+  private def publishData() : Future[Unit] = Future {
 
-    val sender = MessageSender(LOCAL_KAFKA_BROKER)
+    println("Starting data publisher")
     val bos = new ByteArrayOutputStream()
-    val records = getListOfDataRecords(file)
-    var nrec = 0
+    val sender = MessageSender(KAFKA_BROKER)
+    val data = signal()
+    println("Publishing data")
     while (true) {
-      records.foreach(r => {
+      for( i <- 1 to 100) {
+        val record = new CPUData(data.next(), data.getLabel(), "cpu")
         bos.reset()
-        r.writeTo(bos)
+        record.writeTo(bos)
         sender.writeValue(DATA_TOPIC, bos.toByteArray)
-        nrec = nrec + 1
-        if (nrec % 10 == 0)
-          println(s"printed $nrec records")
         pause(dataTimeInterval)
-      })
+      }
+      println("Published another 100 records")
     }
   }
 
   def publishModels() : Future[Unit] = Future {
 
-    val sender = MessageSender(LOCAL_KAFKA_BROKER)
-    val files = getListOfModelFiles(directory)
+    val sender = MessageSender(KAFKA_BROKER)
     val bos = new ByteArrayOutputStream()
-    while (true) {
-      files.foreach(f => {
-        // PMML
-        val pByteArray = Files.readAllBytes(Paths.get(directory + f))
-        val pRecord = ModelDescriptor(
-          name = f.dropRight(5),
-          description = "generated from SparkML", modeltype = ModelDescriptor.ModelType.PMML,
-          dataType = "wine"
-        ).withData(ByteString.copyFrom(pByteArray))
-        bos.reset()
-        pRecord.writeTo(bos)
-        sender.writeValue(MODELS_TOPIC, bos.toByteArray)
-        println(s"Published Model ${pRecord.description}")
-        pause(modelTimeInterval)
-      })
+    val files = getListOfModelFiles(directory)
+    files.foreach(file => {
+      val input = new DataInputStream(new FileInputStream(file))
+      val length = input.readLong()
+      val bytes = new Array[Byte](length.toInt)
+      input.read(bytes)
+      val name = input.readUTF()
+      val description = input.readUTF()
+      val dataType = input.readUTF()
 
-      // TF
-      val tByteArray = Files.readAllBytes(Paths.get(tensorfile))
-      val tRecord = ModelDescriptor(name = tensorfile.dropRight(3),
-        description = "generated from TensorFlow", modeltype = ModelDescriptor.ModelType.TENSORFLOW,
-        dataType = "wine").withData(ByteString.copyFrom(tByteArray))
+      val dis = new DataInputStream(new ByteArrayInputStream(bytes))
+      val plen = dis.readLong().toInt
+      val p = new Array[Byte](plen)
+      dis.read(p)
+      val preprocessor = ModelPreprocessing.parseFrom(p)
+      val glen = dis.readLong().toInt
+      val g = new Array[Byte](glen)
+      dis.read(g)
+      val pRecord = ModelDescriptor(
+        name,
+        description,
+        dataType,
+        ModelDescriptor.ModelType.TENSORFLOW,
+        Some(preprocessor)
+      ).withData(ByteString.copyFrom(g))
       bos.reset()
-      tRecord.writeTo(bos)
+      pRecord.writeTo(bos)
       sender.writeValue(MODELS_TOPIC, bos.toByteArray)
-      println(s"Published Model ${tRecord.description}")
+      println(s"Published Model $description")
       pause(modelTimeInterval)
-    }
+    })
   }
 
   private def pause(timeInterval : Long): Unit = {
@@ -125,36 +124,26 @@ object DataProvider {
     }
   }
 
-  def getListOfDataRecords(file: String): Seq[WineRecord] = {
+  private def signal(timeLength: Int = 50000): MarkovChain = {
 
-    var result = Seq.empty[WineRecord]
-    val bufferedSource = Source.fromFile(file)
-    for (line <- bufferedSource.getLines) {
-      val cols = line.split(";").map(_.trim)
-      val record = new WineRecord(
-        fixedAcidity = cols(0).toDouble,
-        volatileAcidity = cols(1).toDouble,
-        citricAcid = cols(2).toDouble,
-        residualSugar = cols(3).toDouble,
-        chlorides = cols(4).toDouble,
-        freeSulfurDioxide = cols(5).toDouble,
-        totalSulfurDioxide = cols(6).toDouble,
-        density = cols(7).toDouble,
-        pH = cols(8).toDouble,
-        sulphates = cols(9).toDouble,
-        alcohol = cols(10).toDouble,
-        dataType = "wine"
-      )
-      result = record +: result
-    }
-    bufferedSource.close
-    result
+    val generator = new Random()
+
+    val STM : Array[Array[Double]] = Array(Array(.9, .1), Array(.5, .5))
+    val basesignal = new Noise("normal", 0.3,.15)
+    val anomalysignal = new Noise("normal", 0.6,.1)
+    val basenoise = new RandomPulses(generator.nextDouble() * timeLength/15.0,  Math.abs(generator.nextDouble()) * .01)
+    val anomalynoise = new RandomPulses(generator.nextDouble() * timeLength/15.0, Math.abs(generator.nextDouble()) * .01)
+
+    val base = new Model(Seq((basesignal, 1), (basenoise,.1)))
+    val anomaly = new Model(Seq((anomalysignal, 1), (anomalynoise,.1)))
+
+    new MarkovChain(STM, Seq(base, anomaly), 3)
   }
 
   private def getListOfModelFiles(dir: String): Seq[String] = {
     val d = new File(dir)
     if (d.exists && d.isDirectory) {
-      d.listFiles.filter(f => (f.isFile) && (f.getName.endsWith(".pmml"))).map(_.getName)
+      d.listFiles.map(_.getAbsolutePath)
     } else {
       Seq.empty[String]
     }
