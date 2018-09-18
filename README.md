@@ -1,34 +1,25 @@
-# Flink Model server
+# Flink Speculative Model server
 
-This is a simple implementation of model serving using Flink
-The basic idea behind this implementation is fairly straightforward - there are two streams:
+This is a simple implementation of speculative model serving using Flink
+which is an extension of [basic model service implementation](https://github.com/FlinkML/flink-modelServer)
+and is based on the the [blog post](https://developer.lightbend.com/blog/2018-05-24-speculative-model-serving/index.html)
 
--**Data Stream** - Kafka stream delivering data record as protobuf buffer (example, modeldescriptor.proto)
+The overall Flink implementation is presented below:
+![overall implementation](diagramm/Flink%20Speculative.png)
 
--**Model Stream** - Kafka stream delivering models as protobuf buffer (example, modeldescriptor.proto)
-
-The project contains 2 implementations of model server:
-
--**ModelServingKeyedJob** - This little application is based on a RichCoProcessFunction which works on a keyed streams. It is applicable
-   when a single applications serves multiple different models for different data types. Every model is keyed with
-   the type of data what it is designed for. Same key should be present in the data, if it wants to use a specific model.
-   Scaling of the application is based on the data type - for every key there is a separate instance of the
-   RichCoProcessFunction dedicated to this type. All messages of the same type are processed by the same instance
-   of RichCoProcessFunction
-
--**ModelServingFlatJob** - This little application is based on a RichCoFlatMapFunction which works on a non keyed streams. It is
-   applicable when a single applications serves a single model(model set) for a single data type.
-   Scaling of the application is based on the parallelism of input stream and RichCoFlatMapFunction.
-   The model is broadcasted to all RichCoFlatMapFunction instances. The messages are processed by different
-   instances of RichCoFlatMapFunction in a round-robin fashion.
+The project contains the following modules:
    
-The project also contains 3 additional supporting applications
-   
--**DataProvider** - Small application reading data from winequality_red.csv and continiously submitting it to a Kafka topic,
-thus emulating continious data Stream
+**Client** - Small application reading generating signal and publishing three pregenerated models
 
--**ModelProvider** - Small appliacation reading PMML mode definitions (files with .pmml extension) and continiously
-publishing them to the model stream
+**Data** - prebuild models.
    
--**ModelStateQuery** - Small application demonstrating external access to a Flink queryable data, containing
-current model state. It works only for ModelServingKeyedJob (queryable state is supported only for keyed stream)
+**Model** - Code describing base model artifacts and its transformation.
+
+**Protobufs** - Definitions of protobufs used throughout implementation.
+   
+**Query** - Small application demonstrating external access to a Flink queryable data, containing
+current model state. It works only for ModelServingKeyedJob.
+
+**Server** - Actual Flink implementation.
+
+Both Scala and Java implementations are provided.
