@@ -59,6 +59,38 @@ public class SpeculativeExecutionStats {
 
     public long getMax() { return max; }
 
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public void setDecider(String decider) {
+        this.decider = decider;
+    }
+
+    public void setTmout(long tmout) {
+        this.tmout = tmout;
+    }
+
+    public void setSince(long since) {
+        this.since = since;
+    }
+
+    public void setInvocations(long invocations) {
+        this.invocations = invocations;
+    }
+
+    public void setDuration(double duration) {
+        this.duration = duration;
+    }
+
+    public void setMin(long min) {
+        this.min = min;
+    }
+
+    public void setMax(long max) {
+        this.max = max;
+    }
+
     @Override
     public String toString() {
         return "SpeculativeExecutionStats{" +

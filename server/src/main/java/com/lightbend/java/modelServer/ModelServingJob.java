@@ -14,7 +14,6 @@ import com.lightbend.model.Cpudata;
 import com.lightbend.speculative.Speculativedescriptor;
 import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.typeinfo.PrimitiveArrayTypeInfo;
-import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.JobManagerOptions;
 import org.apache.flink.configuration.QueryableStateOptions;
@@ -166,21 +165,15 @@ public class ModelServingJob {
         // Read data from streams
         DataStream<ModelToServe> models = modelsStream
                 .flatMap(new ModelDataConverter())
-                .keyBy(new KeySelector<ModelToServe, String>() {
-                    public String getKey(ModelToServe model) { return model.getDataType(); }
-                });
+                .keyBy(model -> model.getDataType());
 
         DataStream<Cpudata.CPUData> data = dataStream
                 .flatMap(new DataDataConverter())
-                .keyBy(new KeySelector<Cpudata.CPUData, String>() {
-                    public String getKey(Cpudata.CPUData record) { return record.getDataType(); }
-                });
+                .keyBy(record -> record.getDataType());
 
         DataStream<Speculativedescriptor.SpeculativeDescriptor> config = speculativeStream
                 .flatMap(new ConfigDataConverter())
-                .keyBy(new KeySelector<Speculativedescriptor.SpeculativeDescriptor, String>() {
-                    public String getKey(Speculativedescriptor.SpeculativeDescriptor record) { return record.getDatatype(); }
-                });
+                .keyBy(record -> record.getDatatype());
 
 
         // Route models and data
@@ -190,11 +183,10 @@ public class ModelServingJob {
 
         // Pickup side inputs and process them
         DataStream<SpeculativeModel> modelUpdate = ((SingleOutputStreamOperator<SpeculativeServiceRequest>) speculativeStart).getSideOutput(modelTag)
-                .keyBy(new KeySelector<SpeculativeModel, String>() {
-                    public String getKey(SpeculativeModel record) { return record.getDataModel(); }});
+                .keyBy(record -> record.getDataModel());
+
         DataStream<SpeculativeRequest> dataProcess = ((SingleOutputStreamOperator<SpeculativeServiceRequest>) speculativeStart).getSideOutput(dataTag)
-                .keyBy(new KeySelector<SpeculativeRequest, String>() {
-                    public String getKey(SpeculativeRequest record) { return record.getDataModel(); }});
+                .keyBy(record -> record.getDataModel());
 
         // Process individual model
         DataStream<SpeculativeServiceRequest> individualresult = dataProcess
@@ -204,8 +196,7 @@ public class ModelServingJob {
 
         // Run voting
         speculativeStart.union(individualresult)
-                .keyBy(new KeySelector<SpeculativeServiceRequest, String>() {
-                    public String getKey(SpeculativeServiceRequest record) { return record.getDataType(); }})
+                .keyBy(record -> record.getDataType())
                 .connect(config)
                 .process(new SpeculativeProcessor())
                 .map(result -> {
