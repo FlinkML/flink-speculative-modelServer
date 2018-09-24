@@ -12,7 +12,6 @@ import com.lightbend.java.modelServer.typeschema.ByteArraySchema;
 import com.lightbend.kafka.configuration.java.ModelServingConfiguration;
 import com.lightbend.model.Cpudata;
 import com.lightbend.speculative.Speculativedescriptor;
-import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.typeinfo.PrimitiveArrayTypeInfo;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.JobManagerOptions;
@@ -164,15 +163,34 @@ public class ModelServingJob {
 
         // Read data from streams
         DataStream<ModelToServe> models = modelsStream
-                .flatMap(new ModelDataConverter())
+                .flatMap((byte[] value, Collector<ModelToServe> out) -> {
+                    Optional<ModelToServe> model = DataConverter.convertModel(value);
+                    if (model.isPresent())
+                        out.collect(model.get());
+                    else
+                        System.out.println("Failed to convert model input");
+                }).returns(ModelToServe.class)
                 .keyBy(model -> model.getDataType());
 
+
         DataStream<Cpudata.CPUData> data = dataStream
-                .flatMap(new DataDataConverter())
+                .flatMap((byte[] value, Collector<Cpudata.CPUData> out) -> {
+                    Optional<Cpudata.CPUData> record = DataConverter.convertData(value);
+                    if (record.isPresent())
+                        out.collect(record.get());
+                    else
+                        System.out.println("Failed to convert data input");
+                }).returns(Cpudata.CPUData.class)
                 .keyBy(record -> record.getDataType());
 
         DataStream<Speculativedescriptor.SpeculativeDescriptor> config = speculativeStream
-                .flatMap(new ConfigDataConverter())
+                .flatMap((byte[] value, Collector<Speculativedescriptor.SpeculativeDescriptor> out) -> {
+                    Optional<Speculativedescriptor.SpeculativeDescriptor> record = DataConverter.convertConfig(value);
+                    if (record.isPresent())
+                        out.collect(record.get());
+                    else
+                        System.out.println("Failed to convert data input");
+                }).returns(Speculativedescriptor.SpeculativeDescriptor.class)
                 .keyBy(record -> record.getDatatype());
 
 
@@ -205,38 +223,5 @@ public class ModelServingJob {
                     else System.out.println("No model available - skipping");
                     return result;
                 });
-    }
-
-    public static class ModelDataConverter implements FlatMapFunction<byte[], ModelToServe> {
-        @Override
-        public void flatMap(byte[] value, Collector<ModelToServe> out) throws Exception {
-            Optional<ModelToServe> model = DataConverter.convertModel(value);
-            if (model.isPresent())
-                out.collect(model.get());
-            else
-                System.out.println("Failed to convert model input");
-        }
-    }
-
-    public static class DataDataConverter implements FlatMapFunction<byte[], Cpudata.CPUData> {
-        @Override
-        public void flatMap(byte[] value, Collector<Cpudata.CPUData> out) throws Exception {
-            Optional<Cpudata.CPUData> record = DataConverter.convertData(value);
-            if (record.isPresent())
-                out.collect(record.get());
-            else
-                System.out.println("Failed to convert data input");
-        }
-    }
-
-    public static class ConfigDataConverter implements FlatMapFunction<byte[], Speculativedescriptor.SpeculativeDescriptor> {
-        @Override
-        public void flatMap(byte[] value, Collector<Speculativedescriptor.SpeculativeDescriptor> out) throws Exception {
-            Optional<Speculativedescriptor.SpeculativeDescriptor> record = DataConverter.convertConfig(value);
-            if (record.isPresent())
-                out.collect(record.get());
-            else
-                System.out.println("Failed to convert data input");
-        }
     }
 }
